@@ -1,23 +1,28 @@
 # Replacement Copilot - step-by-step guide
 
-A small prototype to show in the SIXT interview: an **AI agent that handles a car-replacement case**. It runs on **Claude Managed Agents**, every tool is a **Go** function with hard guardrails, a person approves each booking, and a **React + TypeScript** UI shows what the agent did and why.
+A study project for one architecture pattern: a **tool-using AI agent behind a backend service**, where *the model reasons, the backend decides, and a person approves*.
 
-All data (partners, customers, fleet, contracts) is made up. Nothing here uses real SIXT systems or data.
+The example domain is car replacement: when a customer's car is in repair, an **AI agent** finds a rental car that their insurer's or leasing company's contract covers. It runs on **Claude Managed Agents**, every tool is a **Go** function with hard guardrails, a person approves each booking, and a **React + TypeScript** UI shows what the agent did and why. The same design fits claims handling, order support, ticket triage, or any process where an AI does the work and a person stays accountable.
+
+All data (partners, customers, fleet, contracts) is made up.
+
+> **New to Go or to AI agents?** Read the [architecture study guide](docs/ARCHITECTURE.md). It explains every concept from zero, follows one case through the code step by step, and has a Go-for-TypeScript-developers section. This README covers how to run it.
 
 ---
 
-## 1. What it shows, mapped to the role
+## 1. What the pattern covers, and where in the code
 
-| Role bullet | Where it is in the prototype |
+| Concept | Where it is in the code |
 |---|---|
-| Go microservices, cloud-native, event-driven | `backend/` Go service: domain store, HTTP + SSE API, a `ReplacementReserved` domain event on an in-process bus (stands in for Kafka) consumed by a second "service" |
-| AI agents in production: multi-step orchestration | `internal/agentrun`: drives a Managed Agents session (stream events, run custom tools in parallel, send results, reconnect + dedupe) |
+| Go microservice, cloud-native, event-driven | `backend/` Go service: domain store, HTTP + SSE API, a `ReplacementReserved` domain event on an in-process bus (stands in for Kafka) consumed by a second "service" |
+| AI agent orchestration (multi-step) | `internal/agentrun`: drives a Managed Agents session (stream events, run custom tools in parallel, send results, reconnect + dedupe) |
 | RAG | `internal/rag`: BM25 over partner contracts + ops playbook, chunks have stable IDs, and the agent must cite them |
 | Context management | The agent works only through small typed tools that return compact JSON. Managed Agents stores the session state on the server, so the browser and Go service don't hold the conversation. |
 | Evaluation | `cmd/eval`: runs all 3 cases end to end and checks fixed rules on the trace and the booking |
 | Guardrails | `domain.CheckProposal`: Go decides whether a proposal is allowed (no downgrade, policy cap, max days, automatic, availability). The model can only propose. |
-| TS/React UI that makes agent behaviour transparent for business users (~30%) | `frontend/` (small functional components in `src/components`, state in `src/hooks`): conversation, approval card, and a live trace of tool calls, retrieved policy text, guardrail results and timings |
-| Own features end to end, spec-first with AI coding agents | This README is the spec. The code was built with **Claude Code** from it (say this openly in the interview) |
+| Human in the loop | `agentrun/approver.go`: the booking tool call stays open until a person approves or rejects it in the UI |
+| Transparent UI for business users | `frontend/` (small functional components in `src/components`, state in `src/hooks`): conversation, approval card, and a live trace of tool calls, retrieved policy text, guardrail results and timings |
+| Spec-first development with AI coding agents | This README is the spec. The code was built from it with **Claude Code** |
 
 ### The three demo cases
 
@@ -65,7 +70,7 @@ All data (partners, customers, fleet, contracts) is made up. Nothing here uses r
 
 > **Cost and beta:** Managed Agents is in beta. You pay for tokens plus session runtime, and session history is kept until you delete it. A full demo run of the 3 cases is a few agent turns each, so it's cheap, but don't leave loops running.
 
-> **About the agent you already created in the Console:** this prototype needs an agent whose tools are the 4 custom Go tools, so `cmd/setup` creates its own agent called "Replacement Copilot". Your Console agent stays untouched. Every session this prototype starts also shows up in the Console session viewer, and the UI header links to it. That view is good to show in the interview.
+> **If you already have agents in the Console:** this project needs an agent whose tools are the 4 custom Go tools, so `cmd/setup` creates its own agent called "Replacement Copilot". Your other agents stay untouched. Every session this project starts also shows up in the Console session viewer, and the UI header links to it. That's the best place to see the full server-side transcript.
 
 ---
 
@@ -84,7 +89,7 @@ created agent agent_... (version 1)
 saved agent.json
 ```
 
-`agent.json` stores the IDs. **Agents are persistent and versioned**: you create one once and reuse its ID for every session. If you change `SystemPrompt` or a tool in `internal/tools/tools.go`, run `go run ./cmd/setup` again. That **updates** the agent to version 2, 3, and so on, and sessions already running keep their version. This is a good point to make about safe rollouts and A/B testing of agent versions.
+`agent.json` stores the IDs. **Agents are persistent and versioned**: you create one once and reuse its ID for every session. If you change `SystemPrompt` or a tool in `internal/tools/tools.go`, run `go run ./cmd/setup` again. That **updates** the agent to version 2, 3, and so on, and sessions already running keep their version. That's what makes safe rollouts and A/B tests of agent versions possible.
 
 ## 5. Step 2: run the Go service
 
@@ -110,15 +115,15 @@ npm run dev
 ```
 Open http://localhost:5173.
 
-## 7. Step 4: the demo script (~5 min in the interview)
+## 7. Step 4: walk through the three cases (~5 min)
 
 1. **RC-1001, the happy path.** Click *Run copilot on RC-1001*. Narrate the right-hand trace as it fills: `get_case` → `search_policies` (open a chunk to show the retrieved contract text) → `search_vehicles` → `propose_replacement` → guardrails **passed** → an approval card appears. Click **Approve**. The agent's final answer has citation chips, and *Confirmed reservations* updates. In the Go terminal, the `[bus] ReplacementReserved consumed by partner-notification-svc` line is the event-driven part.
-2. **RC-1003, the guardrails.** Run it. If the agent tries the SUV or 12 days, the trace shows **Guardrails: blocked** with the reasons, and the agent fixes it on its own. *Talking point: "The model proposes, Go decides. Business rules are code, tested and audited, not prompt text."*
+2. **RC-1003, the guardrails.** Run it. If the agent tries the SUV or 12 days, the trace shows **Guardrails: blocked** with the reasons, and the agent fixes it on its own. The point to notice: the model proposes and Go decides. Business rules are code, tested and audited, not prompt text.
    Then type in the composer: *"The customer agreed to pay the difference for the SUV, 10 days."* The agent proposes `LIS-CTR-03` with `customer_copay=true`. **Reject** it with a note like "co-pay needs written consent" to show that a person's feedback goes back into the agent's loop.
 3. **Open the session in the Console** (header link) to show the full server-side transcript: the same events your Go code consumed.
 4. **Run the eval** (next step) or show its output from an earlier run.
 
-> Tip: run every case once the day before. Save the eval output and a short screen recording in case the Wi-Fi or API fails during the interview.
+> Tip: if you show this to others, run every case once beforehand. Save the eval output and a short screen recording in case the network or API fails during the demo.
 
 ## 8. Step 5: evaluation
 
@@ -145,11 +150,13 @@ The eval uses an auto-approver and a fresh fleet for each case. All checks are d
 1. Change the spec, for example add "prefer delivery to garage when the policy covers it" to the playbook and the prompt.
 2. Re-run `go run ./cmd/setup`, which creates a new agent version.
 3. Run `go run ./cmd/eval` and compare with the last results.
-4. Only then demo it. This is the loop: **spec → Claude Code implements → eval gates the agent version**.
+4. Only then ship it. This is the loop: **spec → Claude Code implements → eval gates the agent version**.
 
 ---
 
-## 10. Design decisions (interview talking points)
+## 10. Design decisions
+
+The [study guide](docs/ARCHITECTURE.md) explains each one in depth.
 
 - **Custom tools only, no sandbox tools.** The agent has no bash and no web. It can only call 4 typed Go functions, which keeps data access and side effects in the backend (least privilege). Managed Agents still runs the agent loop, keeps session state and gives you the session viewer.
 - **Deterministic guardrails apart from the LLM.** The policy exists twice: as prose for RAG (what the agent reasons with) and as a struct for `CheckProposal` (what is enforced). The model can't bypass the guardrails by writing something clever.
@@ -174,7 +181,7 @@ The eval uses an auto-approver and a fresh fleet for each case. All checks are d
 | Symptom | Fix |
 |---|---|
 | `read agent.json ... run go run ./cmd/setup first` | Run step 1 from the `backend` folder |
-| `401 authentication_error` | `ANTHROPIC_API_KEY` is not set in *this* terminal |
+| `401 authentication_error` | No valid credential: run `ant auth login`, or check that `ANTHROPIC_API_KEY` in *this* terminal is a real key and not a placeholder |
 | Go compile error on an SDK type name | The SDK is beta and its names change. Check the installed version with `go list -m github.com/anthropics/anthropic-sdk-go/v2` (the code was written against **v2.15.0**). Pin that version in `go.mod` or fix the name the compiler points to |
 | UI shows nothing after *Run copilot* | Check that the Go server is running on :8080 (Vite proxies `/api`) and look at its terminal for errors |
 | Approval card stays forever | The click goes to `POST /api/approvals/{id}`. A server restart drops pending approvals, so start a new session |
@@ -182,6 +189,8 @@ The eval uses an auto-approver and a fresh fleet for each case. All checks are d
 ## Project layout
 
 ```
+docs/
+  ARCHITECTURE.md  study guide: concepts, step-by-step flow, Go for TS developers
 backend/
   cmd/setup      create/update environment + agent  -> agent.json
   cmd/server     HTTP + SSE API for the UI
